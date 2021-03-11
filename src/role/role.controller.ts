@@ -17,19 +17,6 @@ import { SentryErrorInterceptor } from '../interceptors/sentry-error-interceptor
 export class RoleController {
   constructor(private roleService: RoleService) {}
 
-  @Get()
-  @ApiTags('Roles')
-  @ApiOperation({
-    summary: 'Returns Array or Roles',
-  })
-  @ApiResponse({
-    status: HttpStatus.OK,
-    type: [RoleDTO],
-  })
-  public async getAll() {
-    return await this.roleService.getAll();
-  }
-
   @Get('/:namespace')
   @ApiTags('Roles')
   @ApiOperation({
@@ -42,6 +29,19 @@ export class RoleController {
   })
   public async getById(@Param('namespace') namespace: string) {
     return await this.roleService.getByNamespace(namespace);
+  }
+
+  @Get('/owner/:owner')
+  @ApiTags('Roles')
+  @ApiOperation({
+    summary: 'Returns if Role exists',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    type: Boolean,
+  })
+  public async getByOwner(@Param('owner') owner: string) {
+    return await this.roleService.getByOwner(owner);
   }
 
   @Get('/:namespace/exists')

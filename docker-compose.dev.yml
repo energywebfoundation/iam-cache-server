@@ -22,6 +22,17 @@ services:
       - zero
       - nats
       - ratel
+      - postgres
+  postgres:
+    image: postgres:12-alpine
+    environment:
+      POSTGRES_PASSWORD: password
+      POSTGRES_USERNAME: postgres
+      POSTGRES_DB: dev
+    networks:
+      - app
+    ports:
+      - 5432:5432
   zero:
     container_name: dgraph_zero
     image: dgraph/dgraph:${DGRAPH_VERSION}

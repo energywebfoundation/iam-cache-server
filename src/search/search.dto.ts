@@ -1,16 +1,11 @@
 import { IsArray, IsEnum, IsOptional, IsString } from 'class-validator';
-import { NamespaceEntities } from './namespace.types';
+import { NamespaceEntities } from './search.types';
 
 export class SearchDTO {
-  constructor({
-    search,
-    types,
-  }: {
-    types?: NamespaceEntities[];
-    search: string;
-  }) {
-    this.search = search;
-    this.types = types;
+  static create(data: Partial<SearchDTO>): SearchDTO {
+    const dto = new SearchDTO();
+    Object.assign(dto, data);
+    return dto;
   }
 
   @IsOptional()

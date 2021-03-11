@@ -1,8 +1,6 @@
 import { BullModule } from '@nestjs/bull';
-import { forwardRef, HttpModule, Module } from '@nestjs/common';
-import { AuthModule } from '../auth/auth.module';
+import { HttpModule, Module } from '@nestjs/common';
 import { DgraphModule } from '../dgraph/dgraph.module';
-import { SentryModule } from '../sentry/sentry.module';
 import { DIDController } from './did.controller';
 import { DIDProcessor } from './did.processor';
 import { DIDRepository } from './did.repository';
@@ -23,8 +21,6 @@ const redisConfig = {
       redis: redisConfig,
     }),
     DgraphModule,
-    SentryModule,
-    forwardRef(() => AuthModule),
   ],
   controllers: [DIDController],
   providers: [DIDService, DIDRepository, ResolverFactory, DIDProcessor],

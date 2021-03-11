@@ -1,90 +1,36 @@
-import { KeyValue } from '../interfaces/KeyValue';
-import { DGraphObject } from '../interfaces/DGraphObject';
-
-/**
- * Interface describing raw data required for creation of Role DTO
- */
-export interface CreateRoleData {
-  name: string;
-  namespace: string;
-  owner: string;
-  definition: CreateRoleDefinition;
+export interface Fields {
+  fieldType: string;
+  label: string;
+  required?: boolean;
+  minLength?: number;
+  maxLength?: number;
+  pattern?: string;
+  minValue?: number;
+  maxValue?: number;
+  minDate?: Date;
+  maxDate?: Date;
 }
 
-/**
- * Interface describing raw data required for creation of Role's Definition DTO
- */
-export interface CreateRoleDefinition {
-  version: string;
-  roleType: 'custom';
-  roleName: string;
-  fields?: {
-    fieldType: string;
-    label: string;
-    required?: boolean;
-    minLength?: number;
-    maxLength?: number;
-    pattern?: string;
-    minValue?: number;
-    maxValue?: number;
-    minDate?: Date;
-    maxDate?: Date;
-  }[];
-  metadata?: Record<string, string>;
-  issuer: {
-    uid?: string;
-    issuerType: string;
-    did: string[];
-    roleName: string;
-  };
-  enrolmentPreconditions?: {
-    type: string;
-    conditions: string[];
-    'dgraph.type': string;
-  }[];
+export interface Issuer {
+  issuerType: string;
+  did: string[];
+  roleName?: string;
 }
 
-/**
- * Interface describing generic Role model
- */
-export interface Role extends DGraphObject {
-  name: string;
-  owner: string;
-  namespace: string;
-  definition: RoleDefinition;
+export interface EnrolmentPrecondition {
+  type: string;
+  conditions: string[];
 }
 
 /**
  * Interface describing generic Role's Definition model
  */
-export interface RoleDefinition extends DGraphObject {
+export interface RoleDefinition {
   roleType: string;
   roleName: string;
-  fields?: {
-    fieldType: string;
-    label: string;
-    required?: boolean;
-    minLength?: number;
-    maxLength?: number;
-    pattern?: string;
-    minValue?: number;
-    maxValue?: number;
-    minDate?: Date;
-    maxDate?: Date;
-    uid?: string;
-  }[];
-  metadata?: KeyValue[];
-  issuer: {
-    issuerType: string;
-    did: string[];
-    uid?: string;
-    roleName?: string;
-  };
+  fields?: Fields[];
+  metadata?: Record<string, unknown>;
+  issuer: Issuer;
   version: string;
-  enrolmentPreconditions?: {
-    type: string;
-    conditions: string[];
-    'dgraph.type': string;
-    uid?: string;
-  }[];
+  enrolmentPreconditions?: EnrolmentPrecondition[];
 }

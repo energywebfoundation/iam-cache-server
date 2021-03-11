@@ -1,10 +1,9 @@
 import fs from 'fs';
 import { promisify } from 'util';
-import { forwardRef, Module } from '@nestjs/common';
+import { Global, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { ApplicationService } from '../application/application.service';
-import { DgraphModule } from '../dgraph/dgraph.module';
 import { CookiesServices } from './cookies.service';
 import { JwtAuthGuard } from './jwt.guard';
 import { LoginController } from './login.controller';
@@ -16,10 +15,9 @@ import { JwtStrategy } from './jwt.strategy';
 import { AuthStrategy } from './login.strategy';
 
 const readFile = promisify(fs.readFile);
-
+@Global()
 @Module({
   imports: [
-    DgraphModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => {
@@ -42,7 +40,7 @@ const readFile = promisify(fs.readFile);
       },
       inject: [ConfigService],
     }),
-    forwardRef(() => RoleModule),
+    RoleModule,
   ],
   controllers: [LoginController],
   providers: [

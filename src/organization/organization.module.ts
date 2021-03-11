@@ -1,14 +1,13 @@
 import { Module } from '@nestjs/common';
-import { AuthModule } from '../auth/auth.module';
-import { DgraphModule } from '../dgraph/dgraph.module';
-import { SentryModule } from '../sentry/sentry.module';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { OrganizationController } from './organization.controller';
+import { Organization } from './organization.entity';
 import { OrganizationService } from './organization.service';
 
 @Module({
-  imports: [DgraphModule, SentryModule, AuthModule],
+  imports: [TypeOrmModule.forFeature([Organization])],
   controllers: [OrganizationController],
   providers: [OrganizationService],
-  exports: [OrganizationService],
+  exports: [OrganizationService, TypeOrmModule],
 })
 export class OrganizationModule {}

@@ -1,20 +1,21 @@
-import { forwardRef, Module } from '@nestjs/common';
-import { AuthModule } from '../auth/auth.module';
-import { DgraphModule } from '../dgraph/dgraph.module';
+import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { ApplicationModule } from '../application/application.module';
 import { DIDModule } from '../did/did.module';
-import { SentryModule } from '../sentry/sentry.module';
+import { OrganizationModule } from '../organization/organization.module';
 import { RoleController } from './role.controller';
+import { Role } from './role.entity';
 import { RoleService } from './role.service';
 
 @Module({
   imports: [
-    DgraphModule,
+    TypeOrmModule.forFeature([Role]),
     DIDModule,
-    SentryModule,
-    forwardRef(() => AuthModule),
+    ApplicationModule,
+    OrganizationModule,
   ],
   controllers: [RoleController],
   providers: [RoleService],
-  exports: [RoleService],
+  exports: [RoleService, TypeOrmModule, ApplicationModule, OrganizationModule],
 })
 export class RoleModule {}

@@ -1,7 +1,5 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
-import { DgraphService } from '../dgraph/dgraph.service';
 import {
-  Claim,
   IClaimIssuance,
   IClaimRejection,
   IClaimRequest,
@@ -10,82 +8,98 @@ import {
 import jwt_decode from 'jwt-decode';
 import { RoleService } from '../role/role.service';
 import { Logger } from '../logger/logger.service';
-
-const claimQuery = `
-  uid
-  id
-  requester
-  claimIssuer
-  claimType
-  token
-  issuedToken
-  parentNamespace
-  isAccepted
-  isRejected
-  createdAt
-  acceptedBy
-  type
-`;
+import { ClaimIssueDTO, ClaimRejectionDTO, ClaimRequestDTO } from './claim.dto';
+import { Claim } from './claim.entity';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 
 interface QueryFilters {
-  accepted?: boolean;
-  namespace?: string;
+  accepted?: 'true' | string;
+  parentNamespace?: string;
 }
 
 @Injectable()
 export class ClaimService {
   constructor(
-    private readonly dgraph: DgraphService,
     private readonly roleService: RoleService,
     private readonly logger: Logger,
+    @InjectRepository(Claim)
+    private readonly claimRepository: Repository<Claim>,
   ) {
     this.logger.setContext(ClaimService.name);
+  }
+
+  /**
+   * Returns dgraph filter string based on passed options object
+   * @param options config object
+   * @return string
+   * @private
+   */
+  private parseFilters({
+    accepted,
+    parentNamespace,
+  }: QueryFilters): (
+    | { isAccepted: boolean }
+    | { parentNamespace: string }
+    | undefined
+  )[] {
+    const filters: (
+      | { isAccepted: boolean }
+      | { parentNamespace: string }
+      | undefined
+    )[] = [];
+    if (accepted === 'true') {
+      filters.push({ isAccepted: true });
+    }
+    if (parentNamespace) {
+      filters.push({ parentNamespace });
+    }
+    return filters;
   }
 
   /**
    * Handles claims saving and updates
    * @param data Raw claim data
    */
-  public async saveOrUpdate(
+  public async handleExchangeMessage(
     data: IClaimIssuance | IClaimRejection | IClaimRequest,
   ): Promise<string> {
-    const claim: Claim = await this.getById(data.id);
-    if (!claim && 'token' in data) {
-      try {
+    try {
+      const claim: Claim = await this.getById(data.id);
+      if (!claim && 'token' in data) {
         const {
-          claimData: { claimType },
+          claimData: { claimType, claimTypeVersion },
         }: DecodedClaimToken = jwt_decode(data.token);
-        const user = data.requester;
+
+        const dto = await ClaimRequestDTO.create({
+          ...data,
+          claimType,
+          claimTypeVersion,
+        });
+
         await this.roleService.verifyEnrolmentPrecondition({
           claimType,
-          userDID: user,
+          userDID: dto.requester,
         });
-        return this.saveClaim(data);
-      } catch (err) {
-        this.logger.error(err);
-      }
-      return;
-    }
-    if (claim && !claim.isAccepted && 'isRejected' in data) {
-      const patch: Claim = {
-        ...claim,
-        isRejected: data.isRejected,
-        uid: claim.uid,
-      };
-      await this.dgraph.mutate(patch);
-      return claim.uid;
-    }
 
-    if (claim && !claim.isRejected && 'issuedToken' in data) {
-      const patch: Claim = {
-        ...claim,
-        issuedToken: data.issuedToken,
-        acceptedBy: data.acceptedBy,
-        isAccepted: true,
-        uid: claim.uid,
-      };
-      await this.dgraph.mutate(patch);
-      return claim.uid;
+        await this.create(dto);
+        return;
+      }
+      if (claim && !claim.isAccepted && 'isRejected' in data) {
+        const dto = await ClaimRejectionDTO.create(data);
+
+        await this.reject(dto.id);
+        return;
+      }
+
+      if (claim && !claim.isRejected && 'issuedToken' in data) {
+        const dto = await ClaimIssueDTO.create(data);
+
+        await this.issue(dto);
+        return;
+      }
+    } catch (err) {
+      this.logger.error(err);
     }
   }
 
@@ -93,31 +107,29 @@ export class ClaimService {
    * Saves claim to database
    * @param data Raw claim data
    */
-  public async saveClaim(data: IClaimRequest): Promise<string> {
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
-    const decodedData: DecodedClaimToken = jwt_decode(data.token);
-
-    const namespace = decodedData.claimData.claimType;
-
-    const parent = namespace
+  public async create(data: ClaimRequestDTO): Promise<Claim> {
+    const parent = data.claimType
       .split('.')
       .slice(2)
       .join('.');
 
-    const claim: Claim = {
+    const claim = Claim.create({
       ...data,
-      id: data.id,
-      isAccepted: false,
-      isRejected: false,
-      createdAt: Date.now().toString(),
-      claimType: decodedData.claimData.claimType,
       parentNamespace: parent,
-      uid: '_:new',
-      'dgraph.type': 'Claim',
-    };
-    const res = await this.dgraph.mutate(claim);
-    return res.getUidsMap().get('new');
+    });
+    return this.claimRepository.save(claim);
+  }
+
+  public async reject(id: string) {
+    const claim = await this.claimRepository.findOne(id);
+    const updatedClaim = Claim.create({ ...claim, isRejected: true });
+    return this.claimRepository.save(updatedClaim);
+  }
+
+  public async issue(data: ClaimIssueDTO) {
+    const claim = await this.claimRepository.findOne(data.id);
+    const updatedClaim = Claim.create({ ...claim, ...data, isAccepted: true });
+    return this.claimRepository.save(updatedClaim);
   }
 
   /**
@@ -125,18 +137,7 @@ export class ClaimService {
    * @param id claim ID
    */
   public async getById(id: string): Promise<Claim> {
-    const res = await this.dgraph.query(
-      `
-      query all($id: string) {
-        claim(func: eq(id, $id)) {
-          ${claimQuery}
-        }
-      }`,
-      { $id: id },
-    );
-
-    const json = res.getJson();
-    return json.claim[0];
+    return this.claimRepository.findOne(id);
   }
 
   /**
@@ -145,17 +146,9 @@ export class ClaimService {
    * @param namespace target parent namespace
    */
   async getByParentNamespace(namespace: string) {
-    const res = await this.dgraph.query(
-      `
-      query all($ns: string) {
-        claim(func: eq(parentNamespace, $ns)) {
-          ${claimQuery}
-        }
-      }`,
-      { $ns: namespace },
-    );
-
-    return res.getJson();
+    return this.claimRepository.find({
+      where: { parentNamespace: namespace },
+    });
   }
 
   /**
@@ -163,17 +156,9 @@ export class ClaimService {
    * @param did user DID
    */
   async getByUserDid(did: string) {
-    const res = await this.dgraph.query(
-      `
-      query all($did: string) {
-        claim(func: type(Claim)) @filter(eq(claimIssuer, $did) OR eq(requester, $did)) {
-          ${claimQuery}
-        }
-      }`,
-      { $did: did },
-    );
-
-    return res.getJson();
+    return this.claimRepository.find({
+      where: [{ claimIssuer: did }, { requester: did }],
+    });
   }
 
   /**
@@ -182,18 +167,10 @@ export class ClaimService {
    * @param filters additional filters
    */
   async getByIssuer(did: string, filters: QueryFilters = {}) {
-    const filter = this.getFilters(filters);
-    const res = await this.dgraph.query(
-      `
-      query all($did: string) {
-        claim(func: eq(claimIssuer, $did)) ${filter} {
-          ${claimQuery}
-        }
-      }`,
-      { $did: did },
-    );
-
-    return res.getJson();
+    const parsedFilters = this.parseFilters(filters);
+    return this.claimRepository.find({
+      where: [...parsedFilters, { claimIssuer: did }],
+    });
   }
 
   /**
@@ -202,18 +179,10 @@ export class ClaimService {
    * @param filters additional filters
    */
   async getByRequester(did: string, filters: QueryFilters = {}) {
-    const filter = this.getFilters(filters);
-    const res = await this.dgraph.query(
-      `
-      query all($did: string) {
-        claim(func: eq(requester, $did)) ${filter} {
-          ${claimQuery}
-        }
-      }`,
-      { $did: did },
-    );
-
-    return res.getJson();
+    const parsedFilters = this.parseFilters(filters);
+    return this.claimRepository.find({
+      where: [...parsedFilters, { requester: did }],
+    });
   }
 
   /**
@@ -223,32 +192,14 @@ export class ClaimService {
   public async removeById(id: string, currentUser?: string) {
     const claim = await this.getById(id);
     if (
+      !claim ||
       (currentUser && claim.requester !== currentUser) ||
       claim.isAccepted ||
       claim.isRejected
     ) {
       throw new ForbiddenException();
     }
-    if (claim && claim.uid) {
-      await this.dgraph.delete(claim.uid);
-    }
-  }
-
-  /**
-   * Returns dgraph filter string based on passed options object
-   * @param options config object
-   * @return string
-   * @private
-   */
-  private getFilters(options: QueryFilters): string {
-    const filters: string[] = [];
-    if (options.accepted !== undefined) {
-      filters.push(`eq(isAccepted, ${options.accepted})`);
-    }
-    if (options.namespace) {
-      filters.push(`eq(parentNamespace, ${options.namespace})`);
-    }
-    return ` @filter(${filters.join(' AND ')}) `;
+    await this.claimRepository.delete(claim.id);
   }
 
   /**
@@ -256,27 +207,14 @@ export class ClaimService {
    * @param namespace target claim namespace
    * @param accepted flag for filtering only accepted claims
    */
-  public async getDidOfClaimsOfnamespace(
+  public async getDidOfClaimsOfNamespace(
     namespace: string,
-    accepted?: boolean,
+    accepted?: string,
   ): Promise<string[]> {
-    const filters: string[] = [`eq(claimType, "${namespace}")`];
-    if (accepted !== undefined) {
-      filters.push(`eq(isAccepted, ${accepted})`);
-    }
-    const query = `{
-      data(func: has(requester)) @filter(${filters.join(' AND ')}) {
-        claimType
-        requester
-      }
-    }`;
-    const res = await this.dgraph.query(query);
-    const json = res.getJson();
-
-    if (json?.data?.length) {
-      return json.data.map(c => c.requester);
-    }
-
-    return [];
+    const parsedFilters = this.parseFilters({ accepted });
+    const claims = await this.claimRepository.find({
+      where: [...parsedFilters, { claimType: namespace }],
+    });
+    return claims.map(claim => claim.requester);
   }
 }

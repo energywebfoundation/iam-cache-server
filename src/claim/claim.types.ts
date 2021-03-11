@@ -1,5 +1,3 @@
-import { DGraphObject } from '../interfaces/DGraphObject';
-
 export const NATS_EXCHANGE_TOPIC = 'claim.exchange';
 
 export interface IMessage {
@@ -10,6 +8,8 @@ export interface IMessage {
 
 export interface IClaimRequest extends IMessage {
   token: string;
+  claimType: string;
+  claimTypeVersion: string;
 }
 
 export interface IClaimIssuance extends IMessage {
@@ -21,13 +21,16 @@ export interface IClaimRejection extends IMessage {
   isRejected: boolean;
 }
 
-export type DecodedClaimToken = { claimData: { claimType: string } };
+export type DecodedClaimToken = {
+  claimData: { claimType: string; claimTypeVersion: string };
+};
 
-export interface Claim extends DGraphObject {
+export interface IClaim {
   id: string;
   requester: string;
   claimIssuer: string[];
   claimType: string;
+  claimTypeVersion: string;
   token: string;
   issuedToken?: string;
   isAccepted: boolean;

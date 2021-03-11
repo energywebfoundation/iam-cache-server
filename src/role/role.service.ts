@@ -1,105 +1,38 @@
 import { Injectable } from '@nestjs/common';
 import { IServiceEndpoint } from '@ew-did-registry/did-resolver-interface';
-import { DgraphService } from '../dgraph/dgraph.service';
 import { RoleDefinitionDTO, RoleDTO } from './role.dto';
-import { roleDefinitionFullQuery } from '../interfaces/Types';
-import { CreateRoleData, Role } from './role.types';
-import { validate } from 'class-validator';
 import { DIDService } from '../did/did.service';
 import { DID } from '../did/did.types';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Role } from './role.entity';
+import { Repository } from 'typeorm';
+import { emptyAddress } from '../shared/constants';
+import { ApplicationService } from '../application/application.service';
+import { OrganizationService } from '../organization/organization.service';
 
 @Injectable()
 export class RoleService {
   constructor(
-    private readonly dgraph: DgraphService,
-    private didService: DIDService,
+    @InjectRepository(Role) private readonly roleRepository: Repository<Role>,
+    private readonly didService: DIDService,
+    private readonly appService: ApplicationService,
+    private readonly orgService: OrganizationService,
   ) {}
 
-  private async verifyRole({
-    namespace,
-    issuer,
-    version,
-  }: {
-    namespace?: string;
-    issuer: string;
-    version?: string;
-  }) {
-    if (!namespace) return null;
-
-    const { definition: role } = (await this.getByNamespace(namespace)) || {};
-    if (!role) {
-      return null;
-    }
-
-    if (version && role.version !== version) {
-      return null;
-    }
-
-    if (role.issuer?.issuerType === 'DID') {
-      if (
-        Array.isArray(role.issuer?.did) &&
-        role.issuer?.did.includes(issuer)
-      ) {
-        return {
-          name: role.roleName,
-          namespace,
-        };
-      }
-      return null;
-    }
-
-    if (role.issuer?.issuerType === 'Role') {
-      const issuerDID = new DID(issuer);
-      const { service: issuerClaims } = await this.didService.getById(
-        issuerDID,
-        true,
-      );
-      const issuerRoles = issuerClaims.map(c => c.claimType);
-      if (issuerRoles.includes(role.issuer.roleName)) {
-        return {
-          name: role.roleName,
-          namespace,
-        };
-      }
-    }
-    return null;
-  }
-
   /**
-   * retrieves all existing roles
+   * returns single Role with matching namespace
+   * @param {String} namespace
    */
-  public async getAll(): Promise<{ roles: RoleDTO[] }> {
-    const res = await this.dgraph.query(`
-    {roles(func: type(Role)) {
-      uid
-      name
-      namespace
-      owner
-      definition ${roleDefinitionFullQuery}
-    }}`);
-    return res.getJson();
+  public async getByNamespace(namespace: string) {
+    return this.roleRepository.findOne({ where: { namespace } });
   }
 
   /**
    * returns single Role with matching namespace
    * @param {String} namespace
    */
-  public async getByNamespace(namespace: string): Promise<Role> {
-    const res = await this.dgraph.query(
-      `
-    query all($i: string){
-      Data(func: eq(namespace, $i)) @filter(type(Role)) {
-        uid
-        name
-        namespace
-        owner
-        definition ${roleDefinitionFullQuery}
-      }
-    }`,
-      { $i: namespace },
-    );
-    const json = res.getJson();
-    return json?.Data?.[0];
+  public async getByOwner(namespace: string) {
+    return this.roleRepository.find({ where: { namespace } });
   }
 
   /**
@@ -107,7 +40,7 @@ export class RoleService {
    * @param namespace
    */
   public async exists(namespace: string) {
-    return (await this.getByNamespace(namespace)) !== undefined;
+    return Boolean(await this.getByNamespace(namespace));
   }
 
   /**
@@ -115,24 +48,23 @@ export class RoleService {
    * @param data object containing all needed role properties
    * @return id of newly added Role
    */
-  public async create(data: CreateRoleData): Promise<string> {
-    const orgDefDTO = new RoleDefinitionDTO(data.definition);
-    const roleDTO = new RoleDTO(data, orgDefDTO);
-
-    const err = await validate(roleDTO);
-
-    if (err.length > 0) {
-      return;
+  public async create({ appNamespace, orgNamespace, ...data }: RoleDTO) {
+    if (appNamespace) {
+      const app = await this.appService.getByNamespace(appNamespace);
+      if (!app) {
+        return;
+      }
+      const role = Role.create({ ...data, parentApp: app });
+      return this.roleRepository.save(role);
     }
-
-    const queryData = {
-      uid: '_:new',
-      ...roleDTO,
-    };
-
-    const res = await this.dgraph.mutate(queryData);
-
-    return res.getUidsMap().get('new');
+    if (orgNamespace) {
+      const org = await this.orgService.getByNamespace(orgNamespace);
+      if (!org) {
+        return;
+      }
+      const role = Role.create({ ...data, parentOrg: org });
+      return this.roleRepository.save(role);
+    }
   }
 
   /**
@@ -140,70 +72,30 @@ export class RoleService {
    * @param namespace target role's namespace
    * @param patch
    */
-  public async updateNamespace(
-    namespace: string,
-    patch: CreateRoleData,
-  ): Promise<string> {
-    const oldData = await this.getByNamespace(namespace);
-    if (!oldData) {
-      return;
-    }
-
-    const newFields =
-      Array.isArray(patch.definition.fields) &&
-      patch.definition.fields.map(field => {
-        const oldField =
-          Array.isArray(oldData.definition.fields) &&
-          oldData.definition.fields.find(({ label }) => label === field.label);
-        if (oldField) {
-          return {
-            uid: oldField.uid,
-            ...field,
-          };
-        }
-        return field;
-      });
-
-    const newPreconditions =
-      Array.isArray(patch.definition.enrolmentPreconditions) &&
-      patch.definition.enrolmentPreconditions.map(condition => {
-        const oldCondition =
-          Array.isArray(oldData.definition.enrolmentPreconditions) &&
-          oldData.definition.enrolmentPreconditions.find(
-            ({ type }) => condition.type === type,
-          );
-        if (oldCondition) {
-          return {
-            uid: oldCondition.uid,
-            ...condition,
-          };
-        }
-        return condition;
-      });
-
-    const roleDefDTO = new RoleDefinitionDTO({
-      ...patch.definition,
-      uid: oldData.definition.uid,
-      issuer: {
-        uid: oldData.definition.issuer?.uid,
-        ...patch.definition.issuer,
+  public async update(data: RoleDTO) {
+    const role = await this.roleRepository.findOne({
+      where: {
+        namespace: data.namespace,
       },
-      fields: newFields || undefined,
-      enrolmentPreconditions: newPreconditions || undefined,
     });
+    if (!role) return this.create(data);
 
-    const roleDTO = new RoleDTO(patch, roleDefDTO);
-
-    roleDTO.definition = roleDefDTO;
-
-    const data = {
-      uid: oldData.uid,
-      ...roleDTO,
-    };
-
-    await this.dgraph.mutate(data);
-
-    return oldData.uid;
+    if (data.appNamespace) {
+      const app = await this.appService.getByNamespace(data.appNamespace);
+      if (!app) {
+        return;
+      }
+      const updatedRole = Role.create({ ...role, ...data, parentApp: app });
+      return this.roleRepository.save(updatedRole);
+    }
+    if (data.orgNamespace) {
+      const org = await this.orgService.getByNamespace(data.orgNamespace);
+      if (!org) {
+        return;
+      }
+      const updatedRole = Role.create({ ...role, ...data, parentOrg: org });
+      return this.roleRepository.save(updatedRole);
+    }
   }
 
   /**
@@ -216,7 +108,7 @@ export class RoleService {
       return;
     }
 
-    await this.dgraph.delete(role.uid);
+    return this.roleRepository.delete(role.id);
   }
 
   public async verifyUserRoles(did: string) {
@@ -272,5 +164,89 @@ export class RoleService {
         }
       }
     }
+  }
+
+  private async verifyRole({
+    namespace,
+    issuer,
+    version,
+  }: {
+    namespace?: string;
+    issuer: string;
+    version?: string;
+  }) {
+    if (!namespace) return null;
+
+    const { definition: role } = (await this.getByNamespace(namespace)) || {};
+    if (!role) {
+      return null;
+    }
+
+    if (version && role.version !== version) {
+      return null;
+    }
+
+    if (role.issuer?.issuerType === 'DID') {
+      if (
+        Array.isArray(role.issuer?.did) &&
+        role.issuer?.did.includes(issuer)
+      ) {
+        return {
+          name: role.roleName,
+          namespace,
+        };
+      }
+      return null;
+    }
+
+    if (role.issuer?.issuerType === 'Role') {
+      const issuerDID = new DID(issuer);
+      const { service: issuerClaims } = await this.didService.getById(
+        issuerDID,
+        true,
+      );
+      const issuerRoles = issuerClaims.map(c => c.claimType);
+      if (issuerRoles.includes(role.issuer.roleName)) {
+        return {
+          name: role.roleName,
+          namespace,
+        };
+      }
+    }
+    return null;
+  }
+
+  public async handleRoleSyncWithEns({
+    owner,
+    namespace,
+    orgNamespace,
+    appNamespace,
+    metadata,
+    name,
+  }: {
+    owner: string;
+    namespace: string;
+    orgNamespace?: string;
+    appNamespace?: string;
+    metadata: Record<string, unknown>;
+    name: string;
+  }) {
+    if (owner === emptyAddress) {
+      this.remove(namespace);
+      return;
+    }
+
+    const dto = await RoleDTO.create({
+      definition: await RoleDefinitionDTO.create(metadata),
+      orgNamespace,
+      appNamespace,
+      owner,
+      name,
+      namespace,
+    });
+
+    console.log(dto);
+
+    this.update(dto);
   }
 }

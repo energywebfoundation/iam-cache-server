@@ -9,6 +9,6 @@ export class ClaimProcessor {
   @Process('save')
   public async processClaim(job: Job<string>) {
     const json = JSON.parse(job.data);
-    await this.claimService.saveOrUpdate(json);
+    await this.claimService.handleExchangeMessage(json);
   }
 }

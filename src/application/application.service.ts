@@ -1,59 +1,21 @@
 import { Injectable } from '@nestjs/common';
-import { DgraphService } from '../dgraph/dgraph.service';
-import { roleDefinitionFullQuery } from '../interfaces/Types';
-import {
-  ApplicationDefinitionDTO,
-  ApplicationDTO,
-  CreateApplicationData,
-} from './application.dto';
-import { validate } from 'class-validator';
-import { Application } from './application.types';
-import { RecordToKeyValue } from '../interfaces/KeyValue';
-
-const baseQueryFields = `
-  uid
-  name
-  namespace
-  owner
-  definition ${roleDefinitionFullQuery}
-`;
+import { ApplicationDefinitionDTO, ApplicationDTO } from './application.dto';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Application } from './application.entity';
+import { Repository } from 'typeorm';
+import { Logger } from '../logger/logger.service';
+import { emptyAddress } from '../shared/constants';
+import { OrganizationService } from '../organization/organization.service';
 
 @Injectable()
 export class ApplicationService {
-  constructor(private readonly dgraph: DgraphService) {}
-
-  /**
-   * retrieves all existing applications
-   */
-  public async getAll() {
-    const res = await this.dgraph.query(`
-    query all($i: string){
-      Data(func: type(App)) {
-        ${baseQueryFields}
-      }
-    }`);
-    return res.getJson();
-  }
-
-  /**
-   * Returns all Roles belonging to Application with matching namespace
-   * @param namespace
-   */
-  public async getRoles(namespace: string) {
-    const res = await this.dgraph.query(
-      `
-    query all($i: string){
-      Data(func: eq(namespace, $i)) @filter(type(App)) {
-        namespace
-        roles @filter(eq(dgraph.type, "Role")) {
-          ${baseQueryFields}
-        }
-      }
-    }`,
-      { $i: namespace },
-    );
-    const app = res.getJson()?.Data[0];
-    return app ? { Data: app.roles } : { Data: [] };
+  constructor(
+    @InjectRepository(Application)
+    private readonly applicationRepository: Repository<Application>,
+    private readonly organizationService: OrganizationService,
+    private readonly logger: Logger,
+  ) {
+    this.logger.setContext(ApplicationService.name);
   }
 
   /**
@@ -61,17 +23,31 @@ export class ApplicationService {
    * @param {String} namespace
    */
   public async getByNamespace(namespace: string): Promise<Application> {
-    const res = await this.dgraph.query(
-      `
-    query all($i: string){
-      Data(func: eq(namespace, $i)) @filter(type(App)) {
-        ${baseQueryFields}
-      }
-    }`,
-      { $i: namespace },
-    );
-    const json = res.getJson();
-    return json?.Data?.[0];
+    return this.applicationRepository.findOne({ where: { namespace } });
+  }
+
+  /**
+   * returns single App with matching namespace
+   * @param {String} owner
+   */
+  public async getByOwner(owner: string) {
+    return this.applicationRepository.find({
+      where: {
+        owner,
+      },
+    });
+  }
+
+  /**
+   * Returns all Roles belonging to Application with matching namespace
+   * @param namespace
+   */
+  public async getRoles(namespace: string) {
+    const { roles } = await this.applicationRepository.findOne({
+      where: { namespace },
+      relations: ['roles'],
+    });
+    return roles || [];
   }
 
   /**
@@ -79,7 +55,7 @@ export class ApplicationService {
    * @param namespace
    */
   public async exists(namespace: string) {
-    return (await this.getByNamespace(namespace)) !== undefined;
+    return Boolean(await this.getByNamespace(namespace));
   }
 
   /**
@@ -87,25 +63,15 @@ export class ApplicationService {
    * @param data object containing all needed App properties
    * @return id of newly added App
    */
-  public async create(data: CreateApplicationData) {
-    const appDefDTO = new ApplicationDefinitionDTO(data.definition);
-    const appDTO = new ApplicationDTO(data, appDefDTO);
-
-    const err = await validate(appDTO);
-
-    if (err.length > 0) {
-      console.log(err);
-      return;
+  public async create({ parentOrg, ...data }: ApplicationDTO) {
+    const org = await this.organizationService.getByNamespace(parentOrg);
+    if (!org) {
+      this.logger.debug(
+        `Not able to create application: ${data.namespace}, parent organization ${parentOrg} does not exists`,
+      );
     }
-
-    const queryData = {
-      uid: '_:new',
-      ...appDTO,
-    };
-
-    const res = await this.dgraph.mutate(queryData);
-
-    return res.getUidsMap().get('new');
+    const app = Application.create({ ...data, parentOrg: org });
+    return this.applicationRepository.save(app);
   }
 
   /**
@@ -113,74 +79,18 @@ export class ApplicationService {
    * @param namespace target App's namespace
    * @param patch
    */
-  public async updateNamespace(
-    namespace: string,
-    patch: CreateApplicationData,
-  ) {
-    const oldData = await this.getByNamespace(namespace);
-    if (!oldData) {
-      return;
-    }
-    // Assuming that "others" data from Blockchain is an object and data from db is an array.
-    // Therefore, we assume that data which is not in an Array is data from Blockchain.
-    // This means that it needs to have its uid mapped so as to not duplicate records.
-    const newOthers =
-      patch.definition.others &&
-      !Array.isArray(patch.definition.others) &&
-      RecordToKeyValue(patch.definition.others).map(other => {
-        const oldOther = oldData.definition.others.find(
-          ({ key }) => other.key === key,
-        );
-        if (oldOther) {
-          return {
-            uid: oldOther.uid,
-            ...other,
-          };
-        }
-        return other;
-      });
-    const appDefDTO = new ApplicationDefinitionDTO({
-      ...patch.definition,
-      uid: oldData.definition.uid,
-      others: newOthers,
+  public async update({ parentOrg, ...data }: ApplicationDTO) {
+    const app = await this.applicationRepository.findOne({
+      where: {
+        namespace: data.namespace,
+      },
     });
-    const appDTO = new ApplicationDTO(patch, appDefDTO);
-
-    const err = await validate(appDTO);
-
-    if (err.length > 0) {
-      console.log(err);
-      return;
+    if (!app) {
+      return this.create({ ...data, parentOrg });
     }
-
-    const data = {
-      uid: oldData.uid,
-      ...appDTO,
-    };
-
-    await this.dgraph.mutate(data);
-
-    return oldData.uid;
-  }
-
-  /**
-   * Creates connection between Application and Role
-   * @param id Id of target organization
-   * @param roleId
-   */
-  public async addRole(id: string, roleId: string) {
-    const data = {
-      uid: id,
-      roles: [
-        {
-          uid: roleId,
-        },
-      ],
-    };
-
-    await this.dgraph.mutate(data);
-
-    return id;
+    const org = await this.organizationService.getByNamespace(parentOrg);
+    const updatedApp = Application.create({ ...app, ...data, parentOrg: org });
+    return this.applicationRepository.save(updatedApp);
   }
 
   /**
@@ -189,10 +99,37 @@ export class ApplicationService {
    */
   public async remove(namespace: string) {
     const app = await this.getByNamespace(namespace);
-    if (!app) {
+    if (!app) return;
+    return this.applicationRepository.delete(app.id);
+  }
+
+  public async handleAppSyncWithEns({
+    owner,
+    namespace,
+    parentOrgNamespace,
+    metadata,
+    name,
+  }: {
+    owner: string;
+    namespace: string;
+    parentOrgNamespace: string;
+    metadata: Record<string, unknown>;
+    name: string;
+  }) {
+    if (owner === emptyAddress) {
+      await this.remove(namespace);
       return;
     }
+    const definitionDTO = await ApplicationDefinitionDTO.create(metadata);
 
-    await this.dgraph.delete(app.uid);
+    const dto = await ApplicationDTO.create({
+      definition: definitionDTO,
+      owner,
+      name,
+      namespace,
+      parentOrg: parentOrgNamespace,
+    });
+
+    await this.update(dto);
   }
 }

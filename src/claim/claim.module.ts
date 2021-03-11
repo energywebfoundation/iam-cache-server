@@ -1,11 +1,10 @@
 import { BullModule } from '@nestjs/bull';
 import { Module } from '@nestjs/common';
-import { AuthModule } from '../auth/auth.module';
-import { DgraphModule } from '../dgraph/dgraph.module';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { NatsModule } from '../nats/nats.module';
 import { RoleModule } from '../role/role.module';
-import { SentryModule } from '../sentry/sentry.module';
 import { ClaimController } from './claim.controller';
+import { Claim } from './claim.entity';
 import { ClaimProcessor } from './claim.processor';
 import { ClaimService } from './claim.service';
 
@@ -17,17 +16,15 @@ const redisConfig = {
 
 @Module({
   imports: [
-    DgraphModule,
+    TypeOrmModule.forFeature([Claim]),
     BullModule.registerQueue({
       name: 'claims',
       redis: redisConfig,
     }),
-    SentryModule,
     NatsModule,
-    AuthModule,
     RoleModule,
   ],
   controllers: [ClaimController],
-  providers: [ClaimService, ClaimProcessor],
+  providers: [ClaimService, ClaimProcessor, TypeOrmModule],
 })
 export class ClaimModule {}

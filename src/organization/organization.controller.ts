@@ -3,11 +3,10 @@ import {
   Get,
   HttpStatus,
   Param,
-  Query,
   UseInterceptors,
 } from '@nestjs/common';
 import { OrganizationService } from './organization.service';
-import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { OrganizationDTO } from './organization.dto';
 import { ApplicationDTO } from '../application/application.dto';
 import { RoleDTO } from '../role/role.dto';
@@ -19,27 +18,6 @@ import { SentryErrorInterceptor } from '../interceptors/sentry-error-interceptor
 @Controller('org')
 export class OrganizationController {
   constructor(private organizationService: OrganizationService) {}
-
-  @Get()
-  @ApiTags('Organization')
-  @ApiOperation({
-    summary: 'Returns Array or Organizations',
-  })
-  @ApiResponse({
-    status: HttpStatus.OK,
-    type: [OrganizationDTO],
-    description: 'Array of existing Organizations',
-  })
-  @ApiQuery({
-    name: 'onlySubOrgs',
-    required: false,
-    type: Boolean,
-    description:
-      '**true** - shows only sub orgs <br> **false** - show all orgs',
-  })
-  public async getAll(@Query('onlySubOrgs') onlySubOrgs?: 'true' | 'false') {
-    return await this.organizationService.getAll(onlySubOrgs);
-  }
 
   @Get('/:namespace')
   @ApiTags('Organization')
@@ -53,6 +31,20 @@ export class OrganizationController {
   })
   public async getById(@Param('namespace') namespace: string) {
     return await this.organizationService.getByNamespace(namespace);
+  }
+
+  @Get('/owner/:owner')
+  @ApiTags('Organization')
+  @ApiOperation({
+    summary: 'Returns Organization with given namespace',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    type: OrganizationDTO,
+    description: 'Organizations with matching Id',
+  })
+  public async getByOwner(@Param('owner') owner: string) {
+    return await this.organizationService.getByOwner(owner);
   }
 
   @Get('/:namespace/exists')
@@ -107,22 +99,6 @@ export class OrganizationController {
     description: 'Sub Organizations connected with Org namespace',
   })
   public async getSubOrgs(@Param('namespace') namespace: string) {
-    return await this.organizationService.getSubOrgByParentNamespace(namespace);
-  }
-
-  @Get('/:namespace/hierarchy')
-  @ApiTags('Organization')
-  @ApiOperation({
-    summary: 'Returns Organization with all nested suborgs',
-  })
-  @ApiResponse({
-    status: HttpStatus.OK,
-    type: [OrganizationDTO],
-    description: 'Sub Organizations connected with Org namespace',
-  })
-  public async getOrgHierarchy(@Param('namespace') namespace: string) {
-    return await this.organizationService.getOrganizationNestedSubOrgs(
-      namespace,
-    );
+    return await this.organizationService.getSubOrgs(namespace);
   }
 }

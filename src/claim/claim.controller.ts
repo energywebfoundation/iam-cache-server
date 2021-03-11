@@ -28,8 +28,8 @@ import { NatsService } from '../nats/nats.service';
 import { v4 as uuid } from 'uuid';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
-import { validate } from 'class-validator';
-import { ClaimIssue, ClaimRejection, ClaimRequest } from './claim.dto';
+import { validateOrReject } from 'class-validator';
+import { ClaimIssueDTO, ClaimRejectionDTO, ClaimRequestDTO } from './claim.dto';
 import { Auth } from '../auth/auth.decorator';
 import { SentryErrorInterceptor } from '../interceptors/sentry-error-interceptor';
 import { Logger } from '../logger/logger.service';
@@ -55,7 +55,7 @@ export class ClaimController {
   @ApiExcludeEndpoint()
   @ApiTags('Claims')
   @ApiBody({
-    type: ClaimIssue,
+    type: ClaimIssueDTO,
     description: 'Claim data object, containing id and issuedToken',
   })
   @ApiOperation({
@@ -71,13 +71,9 @@ export class ClaimController {
       acceptedBy: did,
     };
 
-    const claimDTO = new ClaimIssue(claimData);
+    const claimDTO = ClaimIssueDTO.create(claimData);
 
-    const err = await validate(claimDTO);
-
-    if (err.length > 0) {
-      return err;
-    }
+    await validateOrReject(claimDTO);
 
     const payload = JSON.stringify(claimData);
     this.nats.connection.publish(
@@ -90,7 +86,7 @@ export class ClaimController {
   @ApiExcludeEndpoint()
   @ApiTags('Claims')
   @ApiBody({
-    type: ClaimRequest,
+    type: ClaimRequestDTO,
     description: 'Claim data object, containing id and issuedToken',
   })
   @ApiOperation({
@@ -113,13 +109,9 @@ export class ClaimController {
       id,
     };
 
-    const claimDTO = new ClaimRequest(claimData);
+    const claimDTO = ClaimRequestDTO.create(claimData);
 
-    const err = await validate(claimDTO);
-
-    if (err.length > 0) {
-      return err;
-    }
+    await validateOrReject(claimDTO);
 
     const payload = JSON.stringify(claimData);
     this.logger.debug(`publishing claims request ${payload} from ${did}`);
@@ -139,7 +131,7 @@ export class ClaimController {
     summary: 'rejects claim request',
   })
   @ApiBody({
-    type: ClaimRejection,
+    type: ClaimRejectionDTO,
     description: 'Claim data object',
   })
   @ApiResponse({
@@ -153,13 +145,9 @@ export class ClaimController {
       ...data,
     };
 
-    const claimDTO = new ClaimRejection(claimData);
+    const claimDTO = ClaimRejectionDTO.create(claimData);
 
-    const err = await validate(claimDTO);
-
-    if (err.length > 0) {
-      return err;
-    }
+    await validateOrReject(claimDTO);
 
     const payload = JSON.stringify(claimData);
     this.logger.debug(`publishing claims rejection ${payload} from ${did}`);
@@ -229,10 +217,13 @@ export class ClaimController {
   })
   public async getByIssuerDid(
     @Param('did') did: string,
-    @Query('accepted') accepted: boolean,
-    @Query('namespace') namespace: string,
+    @Query('accepted') accepted: string,
+    @Query('namespace') parentNamespace: string,
   ) {
-    return await this.claimService.getByIssuer(did, { accepted, namespace });
+    return await this.claimService.getByIssuer(did, {
+      accepted,
+      parentNamespace,
+    });
   }
 
   @Get('/requester/:did')
@@ -253,10 +244,13 @@ export class ClaimController {
   })
   public async getByRequesterDid(
     @Param('did') did: string,
-    @Query('accepted') accepted: boolean,
-    @Query('namespace') namespace: string,
+    @Query('accepted') accepted: string,
+    @Query('namespace') parentNamespace: string,
   ) {
-    return await this.claimService.getByRequester(did, { accepted, namespace });
+    return await this.claimService.getByRequester(did, {
+      accepted,
+      parentNamespace,
+    });
   }
 
   @Get('/did/:namespace')
@@ -271,8 +265,8 @@ export class ClaimController {
   })
   public async getDidsOfNamespace(
     @Param('namespace') namespace: string,
-    @Query('accepted') accepted: boolean,
+    @Query('accepted') accepted: string,
   ) {
-    return this.claimService.getDidOfClaimsOfnamespace(namespace, accepted);
+    return this.claimService.getDidOfClaimsOfNamespace(namespace, accepted);
   }
 }

@@ -22,7 +22,7 @@ export class DIDDocumentEntity {
         didDocument.claims?.map(
           c => new IPFSClaimDTO(c.jwt, c.serviceEndpoint, c.uid),
         ) ?? new Array<IPFSClaimDTO>();
-      this.uid = didDocument.uid;
+      this.uid = didDocument.id;
     } else {
       this.claims = new Array<IPFSClaimDTO>();
       this.uid = '_:new';
@@ -76,8 +76,6 @@ export class DIDDocumentEntity {
       id: this.id,
       logs: serializedLogs,
       claims: this.claims,
-      uid: this.uid,
-      'dgraph.type': this['dgraph.type'],
     };
   }
 

@@ -1,40 +1,32 @@
-import { Injectable, OnApplicationBootstrap } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { providers, utils, errors } from 'ethers';
 import { abi as ensResolverContract } from '@ensdomains/resolver/build/contracts/PublicResolver.json';
 import { PublicResolverFactory } from '../ethers/PublicResolverFactory';
 import { RoleService } from '../role/role.service';
-import { DefinitionData } from '../interfaces/Types';
 import { ApplicationService } from '../application/application.service';
 import { OrganizationService } from '../organization/organization.service';
 import { EnsRegistryFactory } from '../ethers/EnsRegistryFactory';
 import { ConfigService } from '@nestjs/config';
 import { PublicResolver } from '../ethers/PublicResolver';
 import { EnsRegistry } from '../ethers/EnsRegistry';
-import { ORG_MOCK_DATA } from './ens.testService';
-import { PopulateRolesConfig } from '../../PopulateRolesConfig';
-import { CreateOrganizationDefinition } from '../organization/organization.dto';
-import { CreateApplicationDefinition } from '../application/application.dto';
-import { CreateRoleDefinition } from '../role/role.types';
 import { namehash } from '../ethers/utils';
-import { OwnerService } from '../owner/owner.service';
 import chunk from 'lodash.chunk';
 import { Logger } from '../logger/logger.service';
 
-const emptyAddress = '0x'.padEnd(42, '0');
+export const emptyAddress = '0x'.padEnd(42, '0');
 
 @Injectable()
-export class EnsService implements OnApplicationBootstrap {
+export class EnsService {
   private publicResolver: PublicResolver;
   private ensRegistry: EnsRegistry;
   private provider: providers.JsonRpcProvider;
   constructor(
-    private ownerService: OwnerService,
-    private roleService: RoleService,
-    private applicationService: ApplicationService,
-    private organizationService: OrganizationService,
+    private readonly roleService: RoleService,
+    private readonly applicationService: ApplicationService,
+    private readonly organizationService: OrganizationService,
     private readonly schedulerRegistry: SchedulerRegistry,
-    private config: ConfigService,
+    private readonly config: ConfigService,
     private readonly logger: Logger,
   ) {
     this.logger.setContext(EnsService.name);
@@ -71,42 +63,26 @@ export class EnsService implements OnApplicationBootstrap {
       );
       this.schedulerRegistry.addInterval('ENS Sync', interval);
     }
+
+    this.InitEventListeners();
+    this.syncENS();
   }
 
-  onApplicationBootstrap() {
-    const ENS_SYNC_ENABLED =
-      this.config.get<string>('ENS_SYNC_ENABLED') !== 'false';
-    const setup = async () => {
-      await this.InitEventListeners();
-      await this.loadNamespaces();
-      if (ENS_SYNC_ENABLED) {
-        await this.syncENS();
-      }
-    };
-    setup();
-  }
-
-  private async InitEventListeners(): Promise<void> {
+  private InitEventListeners(): void {
     try {
       this.publicResolver.addListener('TextChanged', async hash => {
-        await this.eventHandler(hash);
+        const namespace = await this.publicResolver.name(hash.toString());
+        if (!namespace) return;
+        await this.eventHandler({ hash, name: namespace });
       });
 
       // Register event handler for owner change or namespace deletion
       this.ensRegistry.addListener('NewOwner', async (node, label, owner) => {
         const hash = utils.keccak256(node + label.slice(2));
         const namespace = await this.publicResolver.name(hash.toString());
-        if (namespace === '') {
-          return;
-        }
+        if (!namespace) return;
 
-        // Remove namespace if owner is set to hex zero
-        if (owner === emptyAddress) {
-          await this.ownerService.deleteNamespace(namespace);
-          return;
-        }
-
-        await this.ownerService.changeOwner(namespace, owner);
+        await this.eventHandler({ hash, name: namespace, owner });
       });
 
       this.ensRegistry.addListener('Transfer', async (node, owner) => {
@@ -115,13 +91,7 @@ export class EnsService implements OnApplicationBootstrap {
           return;
         }
 
-        // Remove namespace if owner is set to hex zero
-        if (owner === emptyAddress) {
-          await this.ownerService.deleteNamespace(namespace);
-          return;
-        }
-
-        await this.ownerService.changeOwner(namespace, owner);
+        this.eventHandler({ hash: node, name: namespace, owner });
       });
     } catch (err) {
       this.logger.error(err);
@@ -155,26 +125,38 @@ export class EnsService implements OnApplicationBootstrap {
     return uniqDomains;
   }
 
-  public async eventHandler(hash: string, name?: string) {
+  public async eventHandler({
+    hash,
+    name,
+    owner,
+  }: {
+    hash: string;
+    name: string;
+    owner?: string;
+  }) {
     try {
       const promises = [
-        // get owner did
-        this.ensRegistry.owner(hash),
         // get role data
         this.publicResolver.text(hash, 'metadata'),
       ];
-      if (!name) {
-        promises.push(this.publicResolver.name(hash));
+      if (!owner) {
+        promises.push(this.ensRegistry.owner(hash));
       }
 
-      const [owner, data, namespace = name] = await Promise.all(promises);
+      const [data, namespaceOwner = owner] = await Promise.all(promises);
 
-      if (!namespace || !owner || !data) {
-        this.logger.debug(`Role not supported ${name || owner || hash}`);
+      if (!namespaceOwner || !data) {
+        this.logger.debug(
+          `Role: ${name} not supported lack of owner or metadata`,
+        );
         return;
       }
 
-      await this.syncNamespace({ data, namespace, owner });
+      await this.syncNamespace({
+        data,
+        namespace: name,
+        owner: namespaceOwner,
+      });
     } catch (err) {
       this.logger.error(err);
       return;
@@ -247,7 +229,7 @@ export class EnsService implements OnApplicationBootstrap {
     namespace: string;
     owner: string;
   }) {
-    let metadata: DefinitionData;
+    let metadata: Record<string, unknown>;
     try {
       metadata = JSON.parse(data);
     } catch (err) {
@@ -265,144 +247,38 @@ export class EnsService implements OnApplicationBootstrap {
       return;
     }
 
-    const organization = await this.organizationService.getByNamespace(
-      orgNamespace,
-    );
-    const orgId = organization?.uid;
-
     if (type === 'Org') {
-      if (owner === emptyAddress) {
-        await this.organizationService.remove(namespace);
-        this.logger.debug(
-          `Removed ${
-            orgId ? 'sub organization' : 'organization'
-          } for ${namespace}`,
-        );
-        return;
-      }
-      const orgExists = await this.organizationService.exists(namespace);
-      if (!orgExists) {
-        await this.organizationService.create({
-          name,
-          definition: metadata as CreateOrganizationDefinition,
-          namespace,
-          owner,
-          parentOrg: organization || undefined,
-        });
-        this.logger.debug(
-          `Created ${
-            orgId ? 'sub organization' : 'organization'
-          } for ${namespace}`,
-        );
-        return;
-      }
-      await this.organizationService.updateNamespace(namespace, {
-        name,
-        definition: metadata as CreateOrganizationDefinition,
+      return this.organizationService.handleOrgSyncWithEns({
+        metadata,
         namespace,
         owner,
-        parentOrg: organization || undefined,
+        name,
+        parentOrgNamespace: orgNamespace,
       });
-      this.logger.debug(`${orgId ? 'SubOrg' : 'Org'} updated: ${namespace}`);
-      return;
     }
 
     if (type === 'App') {
-      if (owner === emptyAddress) {
-        await this.applicationService.remove(namespace);
-        this.logger.debug(`Removed app for ${namespace}`);
-        return;
-      }
-      const appExists = await this.applicationService.exists(namespace);
-      if (orgId && !appExists) {
-        const newAppId = await this.applicationService.create({
-          name,
-          definition: metadata as CreateApplicationDefinition,
-          namespace,
-          owner,
-        });
-        await this.organizationService.addApp(orgId, newAppId);
-        this.logger.debug(
-          `Created app for ${namespace} and added to ${orgNamespace}`,
-        );
-        return;
-      }
-      if (!orgId) {
-        this.logger.debug(
-          `Organization for application not exists ${namespace}`,
-        );
-        return;
-      }
-      await this.applicationService.updateNamespace(namespace, {
-        name,
-        definition: metadata as CreateApplicationDefinition,
+      return this.applicationService.handleAppSyncWithEns({
+        metadata,
         namespace,
         owner,
+        name,
+        parentOrgNamespace: orgNamespace,
       });
-      this.logger.debug(`App updated: ${namespace}`);
-      return;
     }
 
-    const app = await this.applicationService.getByNamespace(appNamespace);
-    const appId = app?.uid;
-
-    const roleData = metadata as CreateRoleDefinition;
-
     if (type === 'Role') {
-      if (owner === emptyAddress) {
-        await this.roleService.remove(namespace);
-        this.logger.debug(`Removed role for ${namespace}`);
-        return;
-      }
-      const roleExists = await this.roleService.exists(namespace);
-      if ((orgId || appId) && !roleExists) {
-        const roleId = await this.roleService.create({
-          name,
-          definition: roleData,
-          namespace,
-          owner,
-        });
-        if (appId) {
-          await this.applicationService.addRole(appId, roleId);
-          this.logger.debug(
-            `created role ${namespace} and added to app ${appNamespace}`,
-          );
-        } else if (orgId) {
-          await this.organizationService.addRole(orgId, roleId);
-          this.logger.debug(
-            `created role ${namespace} and added to org ${orgNamespace}`,
-          );
-        }
-        return;
-      }
-      if (!orgId && !appId) {
-        this.logger.debug(
-          `App or organization for role does not exists: ${namespace}`,
-        );
-        return;
-      }
-      await this.roleService.updateNamespace(namespace, {
-        name,
-        definition: roleData,
+      return this.roleService.handleRoleSyncWithEns({
+        metadata,
         namespace,
         owner,
+        name,
+        appNamespace,
+        orgNamespace,
       });
-      this.logger.debug(`Role updated: ${namespace}`);
-      return;
     }
     this.logger.debug(
       `Bailed: Data not supported ${namespace}, ${JSON.stringify(metadata)}`,
-    );
-  }
-
-  private async loadNamespaces() {
-    const create = async (namespace: string, data: string) => {
-      const owner = await this.ensRegistry.owner(namehash(namespace));
-      await this.syncNamespace({ data, namespace, owner });
-    };
-
-    await Promise.all(
-      PopulateRolesConfig.orgs.map(o => create(o, ORG_MOCK_DATA)),
     );
   }
 
@@ -415,7 +291,7 @@ export class EnsService implements OnApplicationBootstrap {
         await Promise.allSettled(
           part.map(item => {
             const hash = namehash(item);
-            return this.eventHandler(hash, item);
+            return this.eventHandler({ hash, name: item });
           }),
         );
       }

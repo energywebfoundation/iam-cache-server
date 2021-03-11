@@ -1,11 +1,9 @@
-import { DGraphObject } from '../interfaces/DGraphObject';
-
 export const DIDDocumentClaim_DgraphType = 'IPFSClaim';
 
 /**
  * DIDDocument as persisted to DGraph
  */
-export interface DIDDocumentDTO extends DGraphObject {
+export interface DIDDocumentDTO {
   id: string;
 
   /**
@@ -20,7 +18,7 @@ export interface DIDDocumentDTO extends DGraphObject {
 /**
  * An IPFS claim as persisted to DGraph
  */
-export class IPFSClaimDTO implements DGraphObject {
+export class IPFSClaimDTO {
   constructor(jwt: string, serviceEndpoint: string, uid?: string) {
     this.jwt = jwt;
     this.serviceEndpoint = serviceEndpoint;

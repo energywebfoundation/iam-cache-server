@@ -1,108 +1,27 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { DgraphService } from '../dgraph/dgraph.service';
-import { roleDefinitionFullQuery } from '../interfaces/Types';
-import {
-  CreateOrganizationData,
-  OrganizationDefinitionDTO,
-  OrganizationDTO,
-} from './organization.dto';
-import { validate } from 'class-validator';
-import { RecordToKeyValue } from '../interfaces/KeyValue';
-import { Organization } from './organization.types';
+import { Injectable } from '@nestjs/common';
+import { OrganizationDefinitionDTO, OrganizationDTO } from './organization.dto';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Organization } from './organization.entity';
+import { emptyAddress } from '../shared/constants';
 
 @Injectable()
 export class OrganizationService {
-  constructor(private readonly dgraph: DgraphService) {}
-
-  private async getOrgDefinitionByUid(uid: string) {
-    const query = `
-    {
-      definitions(func: uid(${uid})) @filter(type(OrgDefinition))
-      ${roleDefinitionFullQuery}
-    }
-    `;
-    const res = await this.dgraph.query(query);
-    const { definitions } = res.getJson() as {
-      definitions: OrganizationDefinitionDTO[];
-    };
-    const definition = definitions[0];
-    if (!definition) {
-      return {
-        uid,
-      } as OrganizationDefinitionDTO;
-    }
-    return definition;
-  }
-
-  private getDefinitionForOrgs(orgs?: Organization[]) {
-    return (
-      orgs &&
-      Promise.all(
-        orgs.map(async org => ({
-          ...org,
-          definition: await this.getOrgDefinitionByUid(org.definition.uid),
-          subOrgs: await this.getDefinitionForOrgs(org.subOrgs),
-        })),
-      )
-    );
-  }
-
-  /**
-   * retrieves all existing organizations
-   */
-  public async getAll(onlySubOrgs?: 'true' | 'false') {
-    const query = `
-    {
-      Data(func: type(Org)) ${
-        onlySubOrgs === 'true' ? '@filter(has(parentOrg))' : ''
-      } {
-        uid
-        name
-        namespace
-        owner
-        definition ${roleDefinitionFullQuery}
-        parentOrg {
-          uid
-          name
-          namespace
-          owner
-          definition ${roleDefinitionFullQuery}
-        }
-        subOrgs: ~parentOrg {
-          uid
-          name
-          namespace
-          owner
-          definition ${roleDefinitionFullQuery}
-        }
-      }
-    }`;
-    const res = await this.dgraph.query(query);
-    return res.getJson();
-  }
+  constructor(
+    @InjectRepository(Organization)
+    private readonly orgRepository: Repository<Organization>,
+  ) {}
 
   /**
    * Returns all Apps belonging to Organization with matching namespace
    * @param namespace
    */
   public async getApps(namespace: string) {
-    const res = await this.dgraph.query(
-      `
-    query all($i: string){
-      Data(func: eq(namespace, $i)) @filter(type(Org)) {
-        namespace
-        apps @filter(type(App)) {
-          name
-          namespace
-          owner
-          definition ${roleDefinitionFullQuery}
-        }
-      }
-    }`,
-      { $i: namespace },
-    );
-    const org = res.getJson()?.Data[0];
-    return org ? { Data: org.apps } : { Data: [] };
+    const { apps } = await this.orgRepository.findOne({
+      where: { namespace },
+      relations: ['apps'],
+    });
+    return apps;
   }
 
   /**
@@ -110,59 +29,46 @@ export class OrganizationService {
    * @param namespace
    */
   public async getRoles(namespace: string) {
-    const res = await this.dgraph.query(
-      `
-    query all($i: string){
-      Data(func: eq(namespace, $i)) @filter(type(Org)) {
-        namespace
-        roles @filter(type(Role)) {
-          name
-          namespace
-          owner
-          definition ${roleDefinitionFullQuery}
-        }
-      }
-    }`,
-      { $i: namespace },
-    );
-    const org = res.getJson()?.Data[0];
-    return org ? { Data: org.roles } : { Data: [] };
+    const { roles } = await this.orgRepository.findOne({
+      where: { namespace },
+      relations: ['roles'],
+    });
+    return roles;
+  }
+
+  /**
+   * Returns all SubOrgs belonging to Organization with matching namespace
+   * @param namespace
+   */
+  public async getSubOrgs(namespace: string) {
+    const { subOrgs } = await this.orgRepository.findOne({
+      where: {
+        namespace,
+      },
+    });
+    return subOrgs;
   }
 
   /**
    * returns single Org with matching namespace
    * @param {String} namespace
    */
-  public async getByNamespace(namespace: string): Promise<OrganizationDTO> {
-    const res = await this.dgraph.query(
-      `
-    query all($i: string){
-      Data(func: eq(namespace, $i)) @filter(type(Org)) {
-        uid
-        name
-        namespace
-        owner
-        definition ${roleDefinitionFullQuery}
-        parentOrg {
-          uid
-          name
-          namespace
-          owner
-          definition ${roleDefinitionFullQuery}
-        }
-        subOrgs: ~parentOrg {
-          uid
-          name
-          namespace
-          owner
-          definition ${roleDefinitionFullQuery}
-        }
-      }
-    }`,
-      { $i: namespace },
-    );
-    const json = res.getJson();
-    return json?.Data?.[0];
+  public async getByNamespace(namespace: string) {
+    return this.orgRepository.findOne({
+      where: { namespace },
+      relations: ['subOrgs'],
+    });
+  }
+
+  /**
+   * returns single Org with matching namespace
+   * @param {String} owner
+   */
+  public async getByOwner(owner: string) {
+    return this.orgRepository.findOne({
+      where: { owner },
+      relations: ['subOrgs'],
+    });
   }
 
   /**
@@ -170,7 +76,7 @@ export class OrganizationService {
    * @param namespace
    */
   public async exists(namespace: string): Promise<boolean> {
-    return (await this.getByNamespace(namespace)) !== undefined;
+    return Boolean(await this.getByNamespace(namespace));
   }
 
   /**
@@ -178,25 +84,10 @@ export class OrganizationService {
    * @param data object containing all needed Org properties
    * @return id of newly added Org
    */
-  public async create(data: CreateOrganizationData): Promise<string> {
-    const orgDefDTO = new OrganizationDefinitionDTO(data.definition);
-    const orgDTO = new OrganizationDTO(data, orgDefDTO);
-
-    const err = await validate(orgDTO);
-
-    if (err.length > 0) {
-      console.log(err);
-      return;
-    }
-
-    const queryData = {
-      uid: '_:new',
-      ...orgDTO,
-    };
-
-    const res = await this.dgraph.mutate(queryData);
-
-    return res.getUidsMap().get('new');
+  public async create({ parentOrg, ...data }: OrganizationDTO) {
+    const parentOrganization = await this.getByNamespace(parentOrg);
+    const org = Organization.create({ ...data, parentOrg: parentOrganization });
+    return this.orgRepository.save(org);
   }
 
   /**
@@ -204,114 +95,20 @@ export class OrganizationService {
    * @param namespace target Org's namespace
    * @param patch
    */
-  public async updateNamespace(
-    namespace: string,
-    {
-      parentOrg: { uid: parentUid } = {} as Organization,
-      definition,
-      name,
-      namespace: patchNamespace,
-      owner,
-    }: CreateOrganizationData,
-  ): Promise<string> {
-    const { uid, definition: oldDefinition } =
-      (await this.getByNamespace(namespace)) || {};
-    if (!uid) {
-      return;
-    }
-    // Assuming that "others" data from Blockchain is an object and data from db is an array.
-    // Therefore, we assume that data which is not in an Array is data from Blockchain.
-    // This means that it needs to have its uid mapped so as to not duplicate records.
-    const newOthers =
-      definition.others &&
-      !Array.isArray(definition.others) &&
-      RecordToKeyValue(definition.others).map(other => {
-        const oldOther = oldDefinition.others?.find(
-          ({ key }) => other.key === key,
-        );
-        if (oldOther) {
-          return {
-            uid: oldOther.uid,
-            ...other,
-          };
-        }
-        return other;
-      });
-
-    const orgDefDTO = new OrganizationDefinitionDTO({
-      ...definition,
-      others: newOthers,
-    });
-
-    const orgDTO = new OrganizationDTO(
-      {
-        parentOrg: { uid: parentUid } as OrganizationDTO,
-        name,
-        namespace: patchNamespace,
-        owner,
+  public async update({ parentOrg, ...data }: OrganizationDTO) {
+    const org = await this.orgRepository.findOne({
+      where: {
+        namespace: data.namespace,
       },
-      orgDefDTO,
-    );
-
-    if (!parentUid) {
-      delete orgDTO.parentOrg;
-    }
-
-    const err = await validate(orgDTO);
-
-    if (err.length > 0) {
-      console.log(err);
-      return;
-    }
-
-    const data = {
-      uid,
-      ...orgDTO,
-    };
-
-    await this.dgraph.mutate(data);
-
-    return uid;
-  }
-
-  /**
-   * Creates connection between Organization and Application
-   * @param id Id of target organization
-   * @param appId App Id
-   */
-  public async addApp(id: string, appId: string) {
-    const data = {
-      uid: id,
-      apps: [
-        {
-          uid: appId,
-        },
-      ],
-    };
-
-    await this.dgraph.mutate(data);
-
-    return id;
-  }
-
-  /**
-   * Creates connection between Organization and Role
-   * @param id Id of target organization
-   * @param roleId
-   */
-  public async addRole(id: string, roleId: string) {
-    const data = {
-      uid: id,
-      roles: [
-        {
-          uid: roleId,
-        },
-      ],
-    };
-
-    await this.dgraph.mutate(data);
-
-    return id;
+    });
+    if (!org) return this.create({ ...data, parentOrg });
+    const parentOrganization = await this.getByNamespace(parentOrg);
+    const updatedOrg = Organization.create({
+      ...org,
+      ...data,
+      parentOrg: parentOrganization,
+    });
+    return this.orgRepository.save(updatedOrg);
   }
 
   /**
@@ -324,49 +121,37 @@ export class OrganizationService {
       return;
     }
 
-    await this.dgraph.delete(org.uid);
+    return this.orgRepository.delete(org.id);
   }
 
-  public async getSubOrgByParentNamespace(namespace: string) {
-    const res = await this.dgraph.query(
-      `
-    query all($i: string){
-      Data(func: eq(namespace, $i)) @filter(type(Org)) {
-        subOrgs: ~parentOrg {
-          uid
-          name
-          namespace
-          owner
-          definition ${roleDefinitionFullQuery}
-        }
-      }
-    }`,
-      { $i: namespace },
-    );
-    const json = res.getJson() as {
-      Data: { subOrgs: OrganizationDTO[] }[];
-    };
-    return json?.Data?.[0]?.['subOrgs'] || [];
-  }
+  public async handleOrgSyncWithEns({
+    owner,
+    namespace,
+    parentOrgNamespace,
+    metadata,
+    name,
+  }: {
+    owner: string;
+    namespace: string;
+    parentOrgNamespace: string;
+    metadata: Record<string, unknown>;
+    name: string;
+  }) {
+    if (owner === emptyAddress) {
+      this.remove(namespace);
+      return;
+    }
 
-  public async getOrganizationNestedSubOrgs(namespace: string) {
-    const res = await this.dgraph.query(`
-    {
-      orgs(func: eq(namespace, "${namespace}")) @filter(type(Org)) @recurse(depth: 20, loop: true) {
-        uid
-        name
-        owner
-        namespace
-        definition
-        subOrgs: ~parentOrg
-    }
-  }`);
-    const response = res.getJson() as { orgs: OrganizationDTO[] };
-    const orgs = await this.getDefinitionForOrgs(response.orgs);
-    const org = orgs[0];
-    if (!org) {
-      throw new NotFoundException();
-    }
-    return org;
+    const definitionDTO = await OrganizationDefinitionDTO.create(metadata);
+
+    const dto = await OrganizationDTO.create({
+      definition: definitionDTO,
+      parentOrg: parentOrgNamespace,
+      owner,
+      namespace,
+      name,
+    });
+
+    this.update(dto);
   }
 }

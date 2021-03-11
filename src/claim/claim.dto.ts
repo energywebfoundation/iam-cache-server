@@ -1,13 +1,18 @@
 import { IClaimIssuance, IClaimRejection, IClaimRequest } from './claim.types';
-import { IsArray, IsBoolean, IsString } from 'class-validator';
+import {
+  IsArray,
+  IsBoolean,
+  IsString,
+  validateOrReject,
+} from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
-export class ClaimRequest implements IClaimRequest {
-  constructor(data: IClaimRequest) {
-    this.id = data.id;
-    this.claimIssuer = data.claimIssuer;
-    this.requester = data.requester;
-    this.token = data.token;
+export class ClaimRequestDTO implements IClaimRequest {
+  static async create(data: Partial<ClaimRequestDTO>) {
+    const dto = new ClaimRequestDTO();
+    Object.assign(dto, data);
+    await validateOrReject(dto, { whitelist: true });
+    return dto;
   }
 
   @IsString()
@@ -25,15 +30,22 @@ export class ClaimRequest implements IClaimRequest {
   @IsString()
   @ApiProperty()
   token: string;
+
+  @IsString()
+  @ApiProperty()
+  claimType: string;
+
+  @IsString()
+  @ApiProperty()
+  claimTypeVersion: string;
 }
 
-export class ClaimIssue implements IClaimIssuance {
-  constructor(data: IClaimIssuance) {
-    this.id = data.id;
-    this.acceptedBy = data.acceptedBy;
-    this.claimIssuer = data.claimIssuer;
-    this.issuedToken = data.issuedToken;
-    this.requester = data.requester;
+export class ClaimIssueDTO implements IClaimIssuance {
+  static async create(data: Partial<ClaimIssueDTO>) {
+    const dto = new ClaimIssueDTO();
+    Object.assign(dto, data);
+    await validateOrReject(dto, { whitelist: true });
+    return dto;
   }
 
   @IsString()
@@ -57,12 +69,12 @@ export class ClaimIssue implements IClaimIssuance {
   requester: string;
 }
 
-export class ClaimRejection implements IClaimRejection {
-  constructor(data: IClaimRejection) {
-    this.id = data.id;
-    this.claimIssuer = data.claimIssuer;
-    this.requester = data.requester;
-    this.isRejected = data.isRejected;
+export class ClaimRejectionDTO implements IClaimRejection {
+  static async create(data: Partial<ClaimRejectionDTO>) {
+    const dto = new ClaimRejectionDTO();
+    Object.assign(dto, data);
+    await validateOrReject(dto, { whitelist: true });
+    return dto;
   }
 
   @IsString()

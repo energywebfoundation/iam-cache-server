@@ -10,12 +10,13 @@ import {
 } from '@nestjs/common';
 import { LoginGuard } from './login.guard';
 import { Request, Response } from 'express';
-import { ApiBody, ApiQuery } from '@nestjs/swagger';
+import { ApiBody, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { TokenService } from './token.service';
 import { CookiesServices } from './cookies.service';
 import { ConfigService } from '@nestjs/config';
 import { RoleService } from '../role/role.service';
 
+@ApiTags('Auth')
 @Controller()
 export class LoginController {
   constructor(

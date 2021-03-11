@@ -1,15 +1,14 @@
 import { Module } from '@nestjs/common';
-import { AuthModule } from '../auth/auth.module';
-import { DgraphModule } from '../dgraph/dgraph.module';
-import { DgraphService } from '../dgraph/dgraph.service';
-import { SentryModule } from '../sentry/sentry.module';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { OrganizationModule } from '../organization/organization.module';
 import { ApplicationController } from './application.controller';
+import { Application } from './application.entity';
 import { ApplicationService } from './application.service';
 
 @Module({
-  imports: [DgraphModule, SentryModule, AuthModule],
+  imports: [TypeOrmModule.forFeature([Application]), OrganizationModule],
   controllers: [ApplicationController],
-  providers: [ApplicationService, DgraphService],
-  exports: [ApplicationService],
+  providers: [ApplicationService],
+  exports: [ApplicationService, TypeOrmModule, TypeOrmModule],
 })
 export class ApplicationModule {}

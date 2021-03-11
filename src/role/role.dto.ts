@@ -1,89 +1,127 @@
-import { IsArray, IsOptional, IsString, ValidateNested } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
-import { Role, RoleDefinition } from './role.types';
 import {
-  KeyValue,
-  KeyValueAPIDefinition,
-  RecordToKeyValue,
-} from '../interfaces/KeyValue';
+  IsArray,
+  IsBoolean,
+  IsDate,
+  IsNumber,
+  IsObject,
+  IsOptional,
+  IsString,
+  ValidateNested,
+  validateOrReject,
+} from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
+import {
+  EnrolmentPrecondition,
+  Fields,
+  Issuer,
+  RoleDefinition,
+} from './role.types';
+import { BaseEnsEntity } from '../shared/ENSBaseEntity';
+import { Type } from 'class-transformer';
+
+export class FieldsDTO implements Fields {
+  @IsString()
+  @ApiProperty()
+  fieldType: string;
+
+  @IsString()
+  @ApiProperty()
+  label: string;
+
+  @IsOptional()
+  @IsBoolean()
+  @ApiProperty()
+  required?: boolean;
+
+  @IsOptional()
+  @IsNumber()
+  @ApiProperty()
+  minLength?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @ApiProperty()
+  maxLength?: number;
+
+  @IsOptional()
+  @IsString()
+  @ApiProperty()
+  pattern?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @ApiProperty()
+  minValue?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @ApiProperty()
+  maxValue?: number;
+
+  @IsOptional()
+  @IsDate()
+  @ApiProperty()
+  minDate?: Date;
+
+  @IsOptional()
+  @IsDate()
+  @ApiProperty()
+  maxDate?: Date;
+}
+
+export class PreconditionsDTO implements EnrolmentPrecondition {
+  @IsString()
+  type: string;
+
+  @IsArray()
+  conditions: string[];
+}
+
+export class IssuerDTO implements Issuer {
+  @IsString()
+  issuerType: string;
+
+  @IsArray()
+  did: string[];
+
+  @IsString()
+  @IsOptional()
+  roleName?: string;
+}
 
 /**
  * Role's Definition DTO providing validation and API schema for swagger UI
  */
 export class RoleDefinitionDTO implements RoleDefinition {
-  constructor(data: RoleDTODefinitionData) {
-    this.uid = data.uid;
-    this.metadata = RecordToKeyValue(data.metadata);
-    this.roleName = data.roleName;
-    this.fields = data?.fields?.map(f => {
-      f['dgraph.type'] = 'Field';
-      return f;
-    });
-    this.version = data.version;
-    this.issuer = data.issuer;
-    this.issuer['dgraph.type'] = 'RoleIssuer';
-    this.roleType = data.roleType;
-    this.enrolmentPreconditions = data?.enrolmentPreconditions?.map(
-      condition => ({
-        ...condition,
-        'dgraph.type': 'EnrolmentPrecondition',
-      }),
-    );
+  static async create(
+    data: Partial<RoleDefinitionDTO>,
+  ): Promise<RoleDefinitionDTO> {
+    const dto = new RoleDefinitionDTO();
+    Object.assign(dto, data);
+    await validateOrReject(dto, { whitelist: true });
+    return dto;
   }
+  @ValidateNested({ each: true })
+  @IsOptional()
+  @IsArray()
+  @Type(() => FieldsDTO)
+  fields?: FieldsDTO[];
 
   @IsOptional()
-  @IsString()
+  @IsObject()
   @ApiProperty()
-  uid?: string;
+  metadata?: Record<string, unknown>;
+
+  @ValidateNested()
+  @IsObject()
+  @Type(() => IssuerDTO)
+  issuer: IssuerDTO;
 
   @IsOptional()
   @IsArray()
-  @ApiProperty({
-    type: 'array',
-    items: {
-      type: 'object',
-      properties: {
-        type: { type: 'string' },
-        label: { type: 'string' },
-        required: { type: 'boolean' },
-        minLength: { type: 'integer' },
-        maxLength: { type: 'integer' },
-        pattern: { type: 'string' },
-        minValue: { type: 'integer' },
-        maxValue: { type: 'integer' },
-        minDate: { type: 'string', format: 'date' },
-        maxDate: { type: 'string', format: 'date' },
-      },
-    },
-  })
-  fields?: {
-    fieldType: string;
-    label: string;
-    uid?: string;
-    required?: boolean;
-    minLength?: number;
-    maxLength?: number;
-    pattern?: string;
-    minValue?: number;
-    maxValue?: number;
-    minDate?: Date;
-    maxDate?: Date;
-  }[];
-
-  @IsOptional()
-  @IsArray()
-  @ApiProperty(KeyValueAPIDefinition)
-  metadata?: KeyValue[];
-
-  issuer: { issuerType: string; did: string[]; roleName: string; uid?: string };
-
-  @IsOptional()
-  @IsArray()
-  enrolmentPreconditions: {
-    type: string;
-    conditions: string[];
-    'dgraph.type': string;
-  }[];
+  @ValidateNested({ each: true })
+  @Type(() => PreconditionsDTO)
+  enrolmentPreconditions: PreconditionsDTO[];
 
   @IsString()
   @ApiProperty()
@@ -97,69 +135,42 @@ export class RoleDefinitionDTO implements RoleDefinition {
   @IsString()
   @ApiProperty()
   version: string;
-
-  readonly 'dgraph.type' = 'RoleDefinition';
-}
-
-interface RoleDTOData {
-  name: string;
-  owner: string;
-  namespace: string;
-}
-
-interface RoleDTODefinitionData {
-  uid?: string;
-  metadata?: Record<string, string>;
-  roleName: string;
-  fields?: {
-    fieldType: string;
-    label: string;
-    required?: boolean;
-    minLength?: number;
-    maxLength?: number;
-    pattern?: string;
-    minValue?: number;
-    maxValue?: number;
-    minDate?: Date;
-    maxDate?: Date;
-  }[];
-  version: string;
-  issuer: { issuerType: string; did: string[]; roleName: string };
-  roleType: string;
-  enrolmentPreconditions?: {
-    type: string;
-    conditions: string[];
-    'dgraph.type': string;
-  }[];
 }
 
 /**
  * Role DTO providing validation and API schema for swagger UI
  */
-export class RoleDTO implements Role {
-  public uid?: string;
-
-  constructor(data: RoleDTOData, definition: RoleDefinitionDTO) {
-    this.name = data.name;
-    this.owner = data.owner;
-    this.namespace = data.namespace;
-    this.definition = definition;
+export class RoleDTO implements BaseEnsEntity {
+  static async create(data: Partial<RoleDTO>): Promise<RoleDTO> {
+    const dto = new RoleDTO();
+    Object.assign(dto, data);
+    await validateOrReject(dto, { whitelist: true });
+    return dto;
   }
 
-  @ValidateNested()
   @ApiProperty()
+  @IsObject()
   definition: RoleDefinitionDTO;
+
   @IsString()
   @ApiProperty()
   name: string;
+
   @IsString()
   @ApiProperty()
   namespace: string;
+
   @IsString()
   @ApiProperty()
   owner: string;
 
-  readonly 'dgraph.type' = 'Role';
+  @IsOptional()
+  @IsString()
+  orgNamespace?: string;
+
+  @IsOptional()
+  @IsString()
+  appNamespace?: string;
 }
 
 export interface NamespaceFragments {

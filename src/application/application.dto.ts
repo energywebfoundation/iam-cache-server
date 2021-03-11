@@ -1,55 +1,23 @@
-import { IsArray, IsOptional, IsString, ValidateNested } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
-import { AppDefinition, Application } from './application.types';
-import { RoleDTO } from '../role/role.dto';
 import {
-  KeyValue,
-  KeyValueAPIDefinition,
-  RecordToKeyValue,
-} from '../interfaces/KeyValue';
-
-/**
- * Interface describing raw data required for creation of Application DTO
- */
-export interface CreateApplicationData {
-  name: string;
-  namespace: string;
-  owner: string;
-  definition: CreateApplicationDefinition;
-}
-
-/**
- * Interface describing raw data required for creation of Application's Definition DTO
- */
-export interface CreateApplicationDefinition {
-  uid?: string;
-  appName: string;
-  description?: string;
-  websiteUrl?: string;
-  logoUrl?: string;
-  others?: Record<string, string> | KeyValue[];
-}
+  IsObject,
+  IsOptional,
+  IsString,
+  ValidateNested,
+  validateOrReject,
+} from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
+import { BaseEnsDefinition, BaseEnsEntity } from '../shared/ENSBaseEntity';
 
 /**
  * Application's Definition DTO providing validation and API schema for swagger UI
  */
-export class ApplicationDefinitionDTO implements AppDefinition {
-  constructor(data: CreateApplicationDefinition) {
-    this.uid = data.uid;
-    this.description = data.description;
-    this.logoUrl = data.logoUrl;
-    this.websiteUrl = data.websiteUrl;
-    this.others = Array.isArray(data.others)
-      ? data.others
-      : RecordToKeyValue(data.others);
-    this.appName = data.appName;
+export class ApplicationDefinitionDTO implements BaseEnsDefinition {
+  static async create(data: Partial<ApplicationDefinitionDTO>) {
+    const dto = new ApplicationDefinitionDTO();
+    Object.assign(dto, data);
+    await validateOrReject(dto, { whitelist: true });
+    return dto;
   }
-
-  @IsOptional()
-  @IsString()
-  @ApiProperty()
-  uid?: string;
-
   @IsOptional()
   @IsString()
   @ApiProperty()
@@ -70,43 +38,22 @@ export class ApplicationDefinitionDTO implements AppDefinition {
   appName: string;
 
   @IsOptional()
-  @IsArray()
+  @IsObject()
   @ApiProperty({
-    type: 'array',
-    items: KeyValueAPIDefinition,
+    type: 'object',
   })
-  others?: KeyValue[] = [];
-
-  readonly 'dgraph.type' = 'AppDefinition';
-}
-
-/**
- * interface describing required params for creating Application DTO instance
- */
-interface ApplicationDTOParams {
-  name: string;
-  owner: string;
-  namespace: string;
-  roles?: RoleDTO[];
+  others?: Record<string, unknown>;
 }
 
 /**
  * Application DTO providing validation and API schema for swagger UI
  */
-export class ApplicationDTO implements Application {
-  public uid?: string;
-
-  constructor(
-    data: ApplicationDTOParams,
-    definition: ApplicationDefinitionDTO,
-  ) {
-    this.name = data.name;
-    this.owner = data.owner;
-    this.namespace = data.namespace;
-
-    if (data.roles) this.roles = data.roles;
-
-    this.definition = definition;
+export class ApplicationDTO implements BaseEnsEntity {
+  static async create(data: Partial<ApplicationDTO>) {
+    const dto = new ApplicationDTO();
+    Object.assign(dto, data);
+    await validateOrReject(dto, { whitelist: true });
+    return dto;
   }
 
   @ValidateNested()
@@ -125,9 +72,6 @@ export class ApplicationDTO implements Application {
   @ApiProperty()
   namespace: string;
 
-  @IsArray()
-  @ApiProperty()
-  roles: RoleDTO[] = [];
-
-  readonly 'dgraph.type' = 'App';
+  @IsString()
+  parentOrg: string;
 }

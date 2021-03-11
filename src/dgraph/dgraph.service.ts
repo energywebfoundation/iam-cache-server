@@ -22,8 +22,8 @@ export class DgraphService implements OnModuleInit {
   private _instance: DgraphClient;
   private _stub: DgraphClientStub;
 
-  async onModuleInit() {
-    await this.createInstance();
+  onModuleInit() {
+    this.createInstance();
   }
 
   constructor(
